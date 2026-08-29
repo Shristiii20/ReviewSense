@@ -21,7 +21,6 @@ models/
 # Large datasets
 data/
 *.csv
-*.json
 *.parquet
 
 # OS / IDE
