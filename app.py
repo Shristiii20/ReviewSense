@@ -1,97 +1,21 @@
-import streamlit as st
-import torch
+import json
 import shap
 import numpy as np
-import streamlit.components.v1 as components
+import torch
+import streamlit as st
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from pathlib import Path
-
-
-# ============================================================
-# PAGE CONFIGURATION
-# ============================================================
-
-st.set_page_config(
-    page_title="ReviewSense",
-    page_icon="🧠",
-    layout="centered"
+from huggingface_hub import hf_hub_download
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification
 )
 
 
 # ============================================================
-# CUSTOM CSS
+# CONFIGURATION
 # ============================================================
 
-st.markdown(
-    """
-    <style>
-
-    .main {
-        padding-top: 2rem;
-    }
-
-    .title {
-        text-align: center;
-        font-size: 3rem;
-        font-weight: 700;
-        margin-bottom: 0.2rem;
-    }
-
-    .subtitle {
-        text-align: center;
-        font-size: 1.1rem;
-        color: #9ca3af;
-        margin-bottom: 2.5rem;
-    }
-
-    .result-card {
-        padding: 1.5rem;
-        border-radius: 15px;
-        margin-top: 1.5rem;
-        text-align: center;
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-
-    .positive {
-        background-color: rgba(34, 197, 94, 0.12);
-        border-color: rgba(34, 197, 94, 0.3);
-    }
-
-    .negative {
-        background-color: rgba(239, 68, 68, 0.12);
-        border-color: rgba(239, 68, 68, 0.3);
-    }
-
-    .sentiment {
-        font-size: 2rem;
-        font-weight: 700;
-        margin-bottom: 0.5rem;
-    }
-
-    .confidence {
-        font-size: 1.1rem;
-        color: #d1d5db;
-    }
-
-    .footer {
-        text-align: center;
-        color: #6b7280;
-        margin-top: 3rem;
-        font-size: 0.9rem;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# MODEL PATH
-# ============================================================
-
-MODEL_DIR = Path(__file__).parent / "models" / "distilbert"
+MODEL_ID = "Shristiii050/reviewsense-distilbert"
 
 
 # ============================================================
@@ -101,44 +25,51 @@ MODEL_DIR = Path(__file__).parent / "models" / "distilbert"
 @st.cache_resource
 def load_model():
 
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        str(MODEL_DIR)
+        MODEL_ID
     )
 
+    # Load model
     model = AutoModelForSequenceClassification.from_pretrained(
-        str(MODEL_DIR)
+        MODEL_ID
     )
 
+    # Download calibration parameters
+    calibration_file = hf_hub_download(
+        repo_id=MODEL_ID,
+        filename="calibration.json"
+    )
+
+    with open(calibration_file, "r") as f:
+        calibration = json.load(f)
+
+    TEMPERATURE = calibration["temperature"]
+
+    # Select device
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "cpu"
+    )
+
+    model.to(device)
     model.eval()
 
-    return tokenizer, model
-
+    return tokenizer, model, device, TEMPERATURE
 
 # ============================================================
-# LOAD MODEL
+# INITIALIZE MODEL
 # ============================================================
 
-try:
-
-    tokenizer, model = load_model()
-
-except Exception as e:
-
-    st.error(
-        "⚠️ Could not load the trained DistilBERT model."
-    )
-
-    st.code(str(e))
-
-    st.stop()
-
-
+tokenizer, model, device, TEMPERATURE = load_model()
 # ============================================================
 # SHAP EXPLAINER
 # ============================================================
 
 @st.cache_resource
-def load_explainer():
+def create_shap_explainer():
+
+    masker = shap.maskers.Text(tokenizer)
 
     def predict_proba(texts):
 
@@ -147,22 +78,30 @@ def load_explainer():
             return_tensors="pt",
             truncation=True,
             padding=True,
-            max_length=128
+            max_length=512
         )
+
+        inputs = {
+            key: value.to(device)
+            for key, value in inputs.items()
+        }
 
         with torch.no_grad():
 
             outputs = model(**inputs)
 
+            logits = outputs.logits
+
+            calibrated_logits = (
+                logits / TEMPERATURE
+            )
+
             probabilities = torch.softmax(
-                outputs.logits,
+                calibrated_logits,
                 dim=-1
             )
 
-        return probabilities.numpy()
-
-
-    masker = shap.maskers.Text(tokenizer)
+        return probabilities.cpu().numpy()
 
     explainer = shap.Explainer(
         predict_proba,
@@ -172,167 +111,205 @@ def load_explainer():
     return explainer
 
 
+explainer = create_shap_explainer()
 # ============================================================
-# LOAD SHAP
-# ============================================================
-
-try:
-
-    explainer = load_explainer()
-
-except Exception as e:
-
-    explainer = None
-
-
-# ============================================================
-# HEADER
+# SHAP EXPLANATION
 # ============================================================
 
-st.markdown(
-    '<div class="title">🧠 ReviewSense</div>',
-    unsafe_allow_html=True
-)
+def explain_review(text):
 
-st.markdown(
-    '<div class="subtitle">'
-    'Transformer-Based Product Review Intelligence'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# INPUT SECTION
-# ============================================================
-
-st.subheader("Analyze a Product Review")
-
-review = st.text_area(
-    "Enter your review below:",
-    height=150,
-    placeholder=(
-        "Example: The battery life is amazing, "
-        "but the camera quality is disappointing."
+    shap_values = explainer(
+        [text],
+        max_evals=300
     )
-)
 
-
+    return shap_values
 # ============================================================
-# ANALYSIS BUTTON
-# ============================================================
-
-analyze = st.button(
-    "🔍 Analyze Review",
-    use_container_width=True
-)
-
-
-# ============================================================
-# PREDICTION FUNCTION
+# PREDICTION
 # ============================================================
 
-def predict_sentiment(text):
+def predict_review(text):
 
     inputs = tokenizer(
         text,
         return_tensors="pt",
         truncation=True,
         padding=True,
-        max_length=128
+        max_length=512
     )
+
+    inputs = {
+        key: value.to(device)
+        for key, value in inputs.items()
+    }
 
     with torch.no_grad():
 
         outputs = model(**inputs)
 
-        probabilities = torch.softmax(
-            outputs.logits,
+        logits = outputs.logits
+
+        # Raw probabilities
+        raw_probs = torch.softmax(
+            logits,
             dim=-1
         )
 
-    prediction = torch.argmax(
-        probabilities,
+        # Temperature-scaled probabilities
+        calibrated_logits = (
+            logits / TEMPERATURE
+        )
+
+        calibrated_probs = torch.softmax(
+            calibrated_logits,
+            dim=-1
+        )
+
+    predicted_class = torch.argmax(
+        calibrated_probs,
         dim=-1
     ).item()
 
-    confidence = probabilities[0][prediction].item()
+    labels = {
+        0: "NEGATIVE",
+        1: "POSITIVE"
+    }
 
-    return prediction, confidence, probabilities
+    sentiment = labels[predicted_class]
+
+    confidence = calibrated_probs[
+        0,
+        predicted_class
+    ].item()
+
+    if confidence >= 0.95:
+        confidence_level = "Very High"
+    elif confidence >= 0.90:
+        confidence_level = "High"
+    elif confidence >= 0.75:
+        confidence_level = "Moderate"
+    else:
+        confidence_level = "Low"
+
+    return {
+        "sentiment": sentiment,
+        "confidence": confidence,
+        "confidence_level": confidence_level,
+        "negative_probability": calibrated_probs[0, 0].item(),
+        "positive_probability": calibrated_probs[0, 1].item(),
+        "raw_confidence": raw_probs[0, predicted_class].item()
+    }
 
 
 # ============================================================
-# RUN ANALYSIS
+# HEADER
 # ============================================================
 
-if analyze:
+st.title("🔍 ReviewSense")
 
-    # --------------------------------------------------------
-    # INPUT VALIDATION
-    # --------------------------------------------------------
+st.subheader(
+    "AI-Powered Product Review Sentiment Analysis"
+)
+
+st.write(
+    "Analyze a product review using a fine-tuned "
+    "DistilBERT sentiment classification model."
+)
+
+
+# ============================================================
+# MODEL INFO
+# ============================================================
+
+with st.expander("About ReviewSense"):
+
+    st.write(
+        """
+        **ReviewSense** uses a fine-tuned DistilBERT model
+        to classify product reviews as positive or negative.
+
+        **Test Set Performance**
+
+        - Accuracy: 93.18%
+        - Precision: 93.61%
+        - Recall: 93.06%
+        - F1 Score: 93.33%
+
+        The model also uses temperature scaling to improve
+        confidence calibration.
+        """
+    )
+
+
+# ============================================================
+# REVIEW INPUT
+# ============================================================
+
+st.markdown("### 📝 Enter a product review")
+
+review = st.text_area(
+    "Review",
+    placeholder=(
+        "Example: The battery life is amazing, "
+        "but the camera quality is disappointing."
+    ),
+    height=150,
+    label_visibility="collapsed"
+)
+
+
+# ============================================================
+# ANALYZE BUTTON
+# ============================================================
+
+if st.button(
+    "🔮 Analyze Review",
+    use_container_width=True
+):
 
     if not review.strip():
 
         st.warning(
-            "Please enter a product review first."
+            "Please enter a review first."
         )
 
     else:
 
-        # ----------------------------------------------------
-        # MODEL PREDICTION
-        # ----------------------------------------------------
-
-        prediction, confidence, probabilities = predict_sentiment(
-            review
+        result = predict_review(
+            review.strip()
         )
 
+        sentiment = result["sentiment"]
+        confidence = result["confidence"]
 
         # ----------------------------------------------------
-        # LABEL MAPPING
+        # RESULT
         # ----------------------------------------------------
 
-        if prediction == 0:
+        st.markdown("---")
 
-            sentiment = "Negative"
-            emoji = "🔴"
-            css_class = "negative"
+        st.markdown("### 🎯 Prediction")
+
+        if sentiment == "POSITIVE":
+
+            st.success(
+                f"## 🟢 POSITIVE\n\n"
+                f"Confidence: **{confidence:.2%}**"
+            )
 
         else:
 
-            sentiment = "Positive"
-            emoji = "🟢"
-            css_class = "positive"
+            st.error(
+                f"## 🔴 NEGATIVE\n\n"
+                f"Confidence: **{confidence:.2%}**"
+            )
 
 
         # ----------------------------------------------------
-        # RESULT CARD
+        # CONFIDENCE
         # ----------------------------------------------------
 
-        st.markdown(
-            f"""
-            <div class="result-card {css_class}">
-                <div class="sentiment">
-                    {emoji} {sentiment}
-                </div>
-
-                <div class="confidence">
-                    Confidence: {confidence * 100:.2f}%
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-
-        # ----------------------------------------------------
-        # PROBABILITY BREAKDOWN
-        # ----------------------------------------------------
-
-        st.markdown("### Prediction Probabilities")
-
-        negative_probability = probabilities[0][0].item()
-        positive_probability = probabilities[0][1].item()
+        st.markdown("### 📊 Probability Breakdown")
 
         col1, col2 = st.columns(2)
 
@@ -340,108 +317,180 @@ if analyze:
 
             st.metric(
                 "Negative",
-                f"{negative_probability * 100:.2f}%"
+                f"{result['negative_probability']:.2%}"
+            )
+
+            st.progress(
+                result["negative_probability"]
             )
 
         with col2:
 
             st.metric(
                 "Positive",
-                f"{positive_probability * 100:.2f}%"
+                f"{result['positive_probability']:.2%}"
+            )
+
+            st.progress(
+                result["positive_probability"]
             )
 
 
         # ----------------------------------------------------
-        # PROBABILITY BAR
+        # CONFIDENCE LEVEL
         # ----------------------------------------------------
+
+        st.markdown("### 🎯 Model Confidence")
+
+        st.write(
+            f"**{result['confidence_level']}**"
+        )
 
         st.progress(
-            positive_probability,
-            text=(
-                f"Positive probability: "
-                f"{positive_probability * 100:.2f}%"
-            )
+            confidence
         )
 
 
         # ----------------------------------------------------
-        # MODEL INFORMATION
+        # TECHNICAL DETAILS
         # ----------------------------------------------------
 
-        st.divider()
+        with st.expander(
+            "🔬 Technical Details"
+        ):
 
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.write("**Model**")
-            st.write("DistilBERT")
-
-        with col2:
-
-            st.write("**Task**")
-            st.write("Sentiment Classification")
-
-        with col3:
-
-            st.write("**Classes**")
-            st.write("Positive / Negative")
-
-
-        # ----------------------------------------------------
-        # SHAP EXPLANATION
-        # ----------------------------------------------------
-
-        if explainer is not None:
-
-            st.divider()
-
-            st.markdown(
-                "### 🧠 Why did the model predict this?"
+            st.write(
+                f"**Device:** {device}"
             )
 
-            st.caption(
-                "Words highlighted toward Positive or Negative "
-                "show their contribution to the model's prediction."
+            st.write(
+                f"**Raw confidence:** "
+                f"{result['raw_confidence']:.2%}"
             )
 
-            with st.spinner(
-                "Generating explanation..."
-            ):
+            st.write(
+                f"**Calibrated confidence:** "
+                f"{confidence:.2%}"
+            )
 
-                try:
+            st.write(
+                f"**Temperature:** "
+                f"{TEMPERATURE}"
+            )
+# ----------------------------------------------------
+# SHAP EXPLANATION
+# ----------------------------------------------------
 
-                    shap_values = explainer([review])
+st.markdown("### 🔎 Why did the model predict this?")
 
-                    shap_html = shap.plots.text(
-                        shap_values[0],
-                        display=False
-                    )
+with st.spinner("Generating explanation..."):
 
-                    components.html(
-                        shap.getjs() + shap_html,
-                        height=450,
-                        scrolling=True
-                    )
+    shap_values = explain_review(
+        review.strip()
+    )
 
-                except Exception as e:
+values = shap_values.values[0]
+tokens = shap_values.data[0]
+# Positive-class SHAP contributions
+if values.ndim == 2:
 
-                    st.warning(
-                        "SHAP explanation could not be generated."
-                    )
+    positive_values = values[:, 1]
 
-                    st.code(str(e))
+else:
+
+    positive_values = values
+
+
+token_data = []
+
+for token, value in zip(
+    tokens,
+    positive_values
+):
+
+    token = str(token).strip()
+
+    if not token:
+        continue
+
+    token_data.append(
+        {
+            "token": token,
+            "contribution": float(value)
+        }
+    )
+
+if token_data:
+
+    positive_tokens = sorted(
+        token_data,
+        key=lambda x: x["contribution"],
+        reverse=True
+    )[:5]
+
+    negative_tokens = sorted(
+        token_data,
+        key=lambda x: x["contribution"]
+    )[:5]
+
+
+    col1, col2 = st.columns(2)
+
+
+    with col1:
+
+        st.markdown("#### Positive contributors")
+
+        for item in positive_tokens:
+
+            st.write(
+                f"**{item['token']}**  "
+                f"`+{item['contribution']:.3f}`"
+            )
+
+
+    with col2:
+
+        st.markdown("#### Negative contributors")
+
+        for item in negative_tokens:
+
+            st.write(
+                f"**{item['token']}**  "
+                f"`{item['contribution']:.3f}`"
+            )
+
+# ============================================================
+# EXAMPLE REVIEWS
+# ============================================================
+
+st.markdown("---")
+
+st.markdown(
+    "### 💡 Try an example"
+)
+
+examples = [
+    "This product is absolutely fantastic and works perfectly.",
+    "The product is terrible, disappointing, and completely useless.",
+    "I loved the battery life, but the phone overheats constantly.",
+    "Not bad, but definitely not worth the price."
+]
+
+for example in examples:
+
+    st.code(
+        example,
+        language=None
+    )
 
 
 # ============================================================
 # FOOTER
 # ============================================================
 
-st.markdown(
-    """
-    <div class="footer">
-        ReviewSense • NLP + Transformers + Explainable ML
-    </div>
-    """,
-    unsafe_allow_html=True
+st.markdown("---")
+
+st.caption(
+    "ReviewSense • DistilBERT Sentiment Classification"
 )

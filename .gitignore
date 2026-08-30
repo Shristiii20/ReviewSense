@@ -13,10 +13,12 @@ __pycache__/
 
 # Model files
 models/
+notebooks/reviewsense_model/
 *.pt
 *.pth
 *.bin
 *.safetensors
+
 
 # Large datasets
 data/
