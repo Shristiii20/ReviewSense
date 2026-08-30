@@ -1,14 +1,17 @@
 # ReviewSense
 
-A transformer-based sentiment analysis system for classifying product reviews as **Positive** or **Negative**.
+**ReviewSense** is an end-to-end NLP system for product review sentiment analysis, combining a fine-tuned **DistilBERT** classifier with probability calibration, **SHAP-based explainability**, error analysis, and detailed model evaluation.
 
-ReviewSense fine-tunes **DistilBERT** for sentiment classification and combines model evaluation, probability calibration, error analysis, and **SHAP-based explainability** into an end-to-end NLP pipeline. A **TF-IDF + Logistic Regression** model is also implemented as a baseline for comparison.
+A **TF-IDF + Logistic Regression** model is also implemented as a baseline for comparison.
 
+## Live Demo
+
+[Try ReviewSense](https://reviewsense-gvb78kk5seudcfjkgqcdem.streamlit.app/)
 ---
 
 ## Overview
 
-ReviewSense is designed to analyze the sentiment expressed in product reviews while providing both predictions and insights into model behavior.
+ReviewSense analyzes the sentiment expressed in product reviews while providing both predictions and insights into model behavior.
 
 The system includes:
 
@@ -140,3 +143,103 @@ Confidence  : 99.07%
 
 Negative    : 0.93%
 Positive    : 99.07%
+```
+---
+
+
+## 📸 Application
+
+### Review Input
+![ReviewSense Interface](assets/reviewsense-home.png)
+
+### Sentiment Prediction
+![ReviewSense Prediction](assets/reviewsense-prediction.png)
+
+### Model Explainability
+![ReviewSense Explainability](assets/reviewsense-explainability.png)
+
+The ReviewSense application provides an interactive interface for entering
+product reviews, analyzing sentiment, viewing calibrated probabilities and
+model confidence, and inspecting token-level SHAP explanations.
+
+---
+
+##  Tech Stack
+
+- Python
+- PyTorch
+- Hugging Face Transformers
+- DistilBERT
+- SHAP
+- Scikit-learn
+- Streamlit
+- NumPy
+- Pandas
+
+---
+
+## 📁 Project Structure
+
+```text
+ReviewSense/
+├── app.py                         # Streamlit application
+├── requirements.txt               # Python dependencies
+├── README.md                      # Project documentation
+├── .gitignore
+├── assets/
+│   ├── reviewsense-home.png
+│   ├── reviewsense-prediction.png
+│   └── reviewsense-explainability.png
+│
+├── data/
+│   ├── error_analysis.csv
+│   └── raw/
+│       ├── train.csv
+│       ├── test.csv
+│       └── readme.txt
+│
+├── models/
+│   ├── logistic_regression.pkl
+│   ├── tfidf_vectorizer.pkl
+│   ├── results.json
+│   └── distilbert/
+│       ├── config.json
+│       ├── model.safetensors
+│       ├── tokenizer.json
+│       └── ...
+│
+├── notebooks/
+│   ├── 01_eda.ipynb
+│   ├── 02_tfidf_baseline.ipynb
+│   ├── 03_distilbert.ipynb
+│   ├── 04_error_analysis.ipynb
+│   └── reviewsense_model/
+│       ├── calibration.json
+│       ├── evaluation_metrics.json
+│       ├── label_mapping.json
+│       └── ...
+│
+└── src/
+    ├── baseline.py
+    ├── model.py
+    ├── predict.py
+    └── preprocessing.py
+```
+---
+
+## Future Improvements
+
+- Multi-class sentiment classification
+- Aspect-based sentiment analysis
+- Improved handling of negation
+- Larger and more diverse review datasets
+- Batch review analysis
+- Further calibration and uncertainty analysis
+
+---
+
+##  Author
+
+**Shristi**
+
+Built as an end-to-end NLP and transformer-based machine learning project.
